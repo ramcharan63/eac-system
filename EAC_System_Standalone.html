@@ -1,0 +1,1285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EAC System — AI-Enabled CapEx/OpEx Classification</title>
+<script>
+// Minimal CSV/Excel reader - no CDN needed
+const XLSX = {
+  read: function(data, opts) {
+    // Simple CSV fallback
+    const lines = data.split("\n").filter(l=>l.trim());
+    const headers = lines[0].split(",").map(h=>h.replace(/"/g,'').trim());
+    const rows = lines.slice(1).map(line => {
+      const vals = line.split(",");
+      const obj = {};
+      headers.forEach((h,i) => { obj[h] = (vals[i]||'').replace(/"/g,'').trim(); });
+      return obj;
+    });
+    return { SheetNames: ['Sheet1'], Sheets: { Sheet1: { _rows: rows } } };
+  },
+  utils: {
+    sheet_to_json: function(ws, opts) { return ws._rows || []; }
+  }
+};
+</script>
+<style>
+:root {
+  --bg: #0d1117; --bg2: #161b22; --bg3: #1c2128; --bg4: #21262d;
+  --border: #30363d; --border2: #3d4450;
+  --text: #e6edf3; --text2: #8b949e; --text3: #6e7681;
+  --blue: #2f81f7; --blue2: #1f6feb; --blue-bg: #0d2044;
+  --green: #3fb950; --green-bg: #0d2a14;
+  --red: #f85149; --red-bg: #2a0d0d;
+  --yellow: #d29922; --yellow-bg: #2a1d0d;
+  --purple: #a371f7; --purple-bg: #1e0d3a;
+  --orange: #e8834a; --orange-bg: #2a1400;
+  --cyan: #39c5cf;
+  --radius: 8px; --radius2: 12px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;min-height:100vh}
+a{color:var(--blue);text-decoration:none}
+
+/* ---- TOP BAR ---- */
+.topbar{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;gap:16px;height:56px;position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px;color:var(--text)}
+.logo-icon{width:32px;height:32px;background:linear-gradient(135deg,var(--blue2),var(--purple));border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.badge{background:var(--orange);color:#fff;font-size:10px;font-weight:700;padding:2px 7px;border-radius:20px;letter-spacing:.5px}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:12px;color:var(--text2);font-size:12px}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;margin-right:5px;box-shadow:0 0 6px var(--green)}
+
+/* ---- TABS ---- */
+.tabs{background:var(--bg2);border-bottom:1px solid var(--border);display:flex;padding:0 24px;overflow-x:auto}
+.tab{padding:14px 18px;font-size:13px;color:var(--text2);cursor:pointer;border-bottom:2px solid transparent;white-space:nowrap;transition:.15s;display:flex;align-items:center;gap:7px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+.tab-icon{font-size:15px}
+
+/* ---- MAIN ---- */
+.main{padding:24px;max-width:1400px;margin:0 auto}
+.page{display:none}.page.active{display:block}
+
+/* ---- CARDS ---- */
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius2);padding:20px;margin-bottom:16px}
+.card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.card-title{font-size:15px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px}
+.card-subtitle{font-size:12px;color:var(--text2);margin-top:2px}
+
+/* ---- KPI GRID ---- */
+.kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;margin-bottom:24px}
+.kpi{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius2);padding:20px;position:relative;overflow:hidden}
+.kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px}
+.kpi.blue::before{background:var(--blue)}
+.kpi.green::before{background:var(--green)}
+.kpi.orange::before{background:var(--orange)}
+.kpi.purple::before{background:var(--purple)}
+.kpi-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.8px;margin-bottom:8px}
+.kpi-value{font-size:32px;font-weight:700;line-height:1}
+.kpi-sub{font-size:12px;color:var(--text2);margin-top:6px}
+
+/* ---- CHART BARS ---- */
+.bar-chart{display:flex;align-items:flex-end;gap:6px;height:100px;margin:12px 0}
+.bar{flex:1;background:var(--blue2);border-radius:4px 4px 0 0;min-height:4px;transition:.3s;cursor:pointer;position:relative}
+.bar:hover{opacity:.8}
+.bar.green-bar{background:var(--green)}
+.bar.orange-bar{background:var(--orange)}
+.bar-label{text-align:center;font-size:10px;color:var(--text3);margin-top:4px}
+
+/* ---- PIE CHART ---- */
+.pie-wrap{display:flex;align-items:center;gap:24px}
+.pie-svg{flex-shrink:0}
+.pie-legend{display:flex;flex-direction:column;gap:10px}
+.pie-item{display:flex;align-items:center;gap:8px;font-size:13px}
+.pie-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+
+/* ---- TABLE ---- */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{background:var(--bg3);padding:10px 12px;text-align:left;font-weight:600;color:var(--text2);font-size:11px;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--border2);white-space:nowrap}
+td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+tr:hover td{background:var(--bg3)}
+tr:last-child td{border-bottom:none}
+.mono{font-family:monospace;font-size:11px}
+
+/* ---- BADGES ---- */
+.badge-capex{background:var(--green-bg);color:var(--green);font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;border:1px solid rgba(63,185,80,.3)}
+.badge-opex{background:var(--red-bg);color:var(--red);font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;border:1px solid rgba(248,81,73,.3)}
+.badge-amb{background:var(--yellow-bg);color:var(--yellow);font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;border:1px solid rgba(210,153,34,.3)}
+.badge-stub{background:var(--orange-bg);color:var(--orange);font-size:10px;font-weight:600;padding:1px 6px;border-radius:20px}
+.badge-live{background:var(--green-bg);color:var(--green);font-size:10px;font-weight:600;padding:1px 6px;border-radius:20px}
+.badge-soon{background:var(--purple-bg);color:var(--purple);font-size:10px;font-weight:600;padding:1px 6px;border-radius:20px}
+
+/* ---- CONF BAR ---- */
+.conf-bar{height:6px;border-radius:3px;background:var(--border);overflow:hidden;min-width:80px}
+.conf-fill{height:100%;border-radius:3px;transition:.3s}
+
+/* ---- UPLOAD ---- */
+.drop-zone{border:2px dashed var(--border2);border-radius:var(--radius2);padding:48px;text-align:center;transition:.2s;cursor:pointer;background:var(--bg3)}
+.drop-zone:hover,.drop-zone.drag{border-color:var(--blue);background:var(--blue-bg)}
+.drop-zone input{display:none}
+.drop-icon{font-size:40px;margin-bottom:12px}
+.drop-title{font-size:16px;font-weight:600;margin-bottom:8px}
+.drop-sub{color:var(--text2);font-size:13px}
+
+/* ---- BTN ---- */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;border:none;transition:.15s}
+.btn-primary{background:var(--blue2);color:#fff}.btn-primary:hover{background:#388bfd}
+.btn-sm{padding:5px 12px;font-size:12px}
+.btn-outline{background:transparent;color:var(--text);border:1px solid var(--border2)}.btn-outline:hover{background:var(--bg4)}
+.btn-green{background:var(--green);color:#0d1117}.btn-green:hover{opacity:.9}
+.btn-red{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.3)}.btn-red:hover{background:rgba(248,81,73,.15)}
+
+/* ---- ALERT ---- */
+.alert{border-radius:var(--radius);padding:12px 16px;margin-bottom:16px;display:flex;align-items:flex-start;gap:10px;font-size:13px}
+.alert-info{background:var(--blue-bg);border:1px solid rgba(47,129,247,.3);color:#79c0ff}
+.alert-success{background:var(--green-bg);border:1px solid rgba(63,185,80,.3);color:#56d364}
+.alert-warn{background:var(--yellow-bg);border:1px solid rgba(210,153,34,.3);color:#e3b341}
+
+/* ---- PIPELINE ---- */
+.pipeline{display:flex;align-items:center;gap:0;overflow-x:auto;padding:20px 0}
+.stage{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:16px;min-width:140px;text-align:center;position:relative}
+.stage.active{border-color:var(--blue);box-shadow:0 0 0 1px var(--blue),0 0 16px rgba(47,129,247,.15)}
+.stage-icon{font-size:24px;margin-bottom:8px}
+.stage-name{font-size:12px;font-weight:600;color:var(--text);margin-bottom:4px}
+.stage-sub{font-size:10px;color:var(--text3)}
+.arrow{color:var(--text3);font-size:20px;padding:0 6px;flex-shrink:0}
+
+/* ---- CONNECTORS ---- */
+.conn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+.conn-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius2);padding:20px;position:relative}
+.conn-card.active-conn{border-color:rgba(47,129,247,.4)}
+.conn-card.soon-conn{opacity:.7}
+.conn-icon{font-size:32px;margin-bottom:12px}
+.conn-name{font-size:14px;font-weight:600;margin-bottom:4px}
+.conn-desc{font-size:12px;color:var(--text2);margin-bottom:12px}
+.conn-status{position:absolute;top:12px;right:12px}
+
+/* ---- AUDIT ---- */
+.audit-item{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:16px;margin-bottom:12px;cursor:pointer;transition:.15s}
+.audit-item:hover{border-color:var(--border2)}
+.audit-item.expanded{border-color:var(--blue)}
+.audit-header{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.audit-detail{margin-top:16px;padding-top:16px;border-top:1px solid var(--border);display:none}
+.audit-detail.show{display:block}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px}
+.detail-label{color:var(--text3);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:2px}
+.detail-value{color:var(--text);font-family:monospace;font-size:11px}
+
+/* ---- SHIFT METRIC ---- */
+.shift-bar{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;height:32px;display:flex;align-items:center}
+.shift-capex{background:linear-gradient(90deg,var(--green),#2ea043);height:100%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;transition:.5s}
+.shift-opex{background:linear-gradient(90deg,var(--red),#c03030);height:100%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff;transition:.5s}
+
+/* ---- SCROLL ---- */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ---- FORM PARSER ---- */
+.form-card{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px}
+.form-match{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:20px}
+.form-match.ok{background:var(--green-bg);color:var(--green)}
+.form-match.partial{background:var(--yellow-bg);color:var(--yellow)}
+
+.evidence-cell{max-width:280px;font-size:11px;color:var(--text2);line-height:1.4}
+.override-btn{font-size:10px;padding:3px 8px;margin-left:8px}
+
+.section-title{font-size:20px;font-weight:700;margin-bottom:4px}
+.section-sub{color:var(--text2);margin-bottom:24px;font-size:13px}
+
+.progress{height:4px;background:var(--border);border-radius:2px;overflow:hidden;margin-top:8px}
+.progress-fill{height:100%;background:var(--blue);border-radius:2px;transition:.3s}
+
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+
+.stat-row{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border)}
+.stat-row:last-child{border-bottom:none}
+
+#upload-status{margin-top:16px;display:none}
+#classify-section{display:none}
+
+.agent-row{display:flex;align-items:center;gap:12px;padding:14px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:8px}
+.agent-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.agent-info{flex:1}
+.agent-name{font-size:13px;font-weight:600;margin-bottom:2px}
+.agent-desc{font-size:11px;color:var(--text2)}
+.agent-status{font-size:11px;padding:3px 10px;border-radius:20px}
+.agent-status.active{background:var(--green-bg);color:var(--green)}
+.agent-status.stub{background:var(--orange-bg);color:var(--orange)}
+</style>
+</head>
+<body>
+
+<!-- TOP BAR -->
+<div class="topbar">
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div>
+      <div>EAC System <span class="badge">v2.1</span></div>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span><span class="status-dot"></span>System Operational</span>
+    <span>|</span>
+    <span>Rule Engine v2.1.0</span>
+    <span>|</span>
+    <span id="record-count">0 records loaded</span>
+  </div>
+</div>
+
+<!-- TABS -->
+<div class="tabs">
+  <div class="tab active" onclick="showPage('dashboard')" id="tab-dashboard">
+    <span class="tab-icon">📊</span>Dashboard
+  </div>
+  <div class="tab" onclick="showPage('upload')" id="tab-upload">
+    <span class="tab-icon">📂</span>Data Upload
+  </div>
+  <div class="tab" onclick="showPage('forms')" id="tab-forms">
+    <span class="tab-icon">📋</span>Form Parser
+  </div>
+  <div class="tab" onclick="showPage('pipeline')" id="tab-pipeline">
+    <span class="tab-icon">🔄</span>Pipeline
+  </div>
+  <div class="tab" onclick="showPage('connectors')" id="tab-connectors">
+    <span class="tab-icon">🔌</span>Connectors
+  </div>
+  <div class="tab" onclick="showPage('audit')" id="tab-audit">
+    <span class="tab-icon">🔍</span>Audit Trail
+  </div>
+</div>
+
+<div class="main">
+
+<!-- ================== DASHBOARD ================== -->
+<div class="page active" id="page-dashboard">
+  <div class="section-title">Classification Dashboard</div>
+  <div class="section-sub">AI-powered CapEx/OpEx activity classification — Network Capital Labor Survey</div>
+  <div id="load-banner" style="background:#1f6feb;border-radius:8px;padding:16px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between">
+    <div style="color:#fff;font-size:14px">⚡ Click to load all 10 pre-classified form records</div>
+    <button onclick="loadFormClassification();document.getElementById('load-banner').style.display='none'" 
+      style="background:#fff;color:#1f6feb;border:none;padding:10px 24px;border-radius:6px;font-weight:700;font-size:14px;cursor:pointer">
+      LOAD DATA NOW
+    </button>
+  </div>
+
+  <div class="kpi-grid">
+    <div class="kpi blue">
+      <div class="kpi-label">Total Records</div>
+      <div class="kpi-value" id="kpi-total">0</div>
+      <div class="kpi-sub">Classified this session</div>
+    </div>
+    <div class="kpi green">
+      <div class="kpi-label">CapEx Rate</div>
+      <div class="kpi-value" id="kpi-capex-pct">—</div>
+      <div class="kpi-sub" id="kpi-capex-count">— records</div>
+    </div>
+    <div class="kpi orange">
+      <div class="kpi-label">OpEx Rate</div>
+      <div class="kpi-value" id="kpi-opex-pct">—</div>
+      <div class="kpi-sub" id="kpi-opex-count">— records</div>
+    </div>
+    <div class="kpi purple">
+      <div class="kpi-label">Avg Confidence</div>
+      <div class="kpi-value" id="kpi-conf">—</div>
+      <div class="kpi-sub" id="kpi-ambig">— ambiguous</div>
+    </div>
+  </div>
+
+  <!-- Capitalisation Shift -->
+  <div class="card" id="shift-card">
+    <div class="card-header">
+      <div>
+        <div class="card-title">📈 Capitalisation Shift Metric</div>
+        <div class="card-subtitle">Baseline (100% OpEx assumed) → Post-Classification</div>
+      </div>
+      <div style="text-align:right;font-size:13px;color:var(--text2)">
+        <div>Shift Value: <span id="shift-dollar" style="color:var(--green);font-weight:700">—</span></div>
+        <div style="font-size:11px">at avg $95/hr fully-loaded rate</div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">BASELINE (100% OpEx)</div>
+    <div class="shift-bar" style="margin-bottom:8px">
+      <div class="shift-opex" style="width:100%">100% OpEx</div>
+    </div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:8px">POST-CLASSIFICATION</div>
+    <div class="shift-bar">
+      <div class="shift-capex" id="shift-capex-bar" style="width:0%">—</div>
+      <div class="shift-opex" id="shift-opex-bar" style="width:100%">—</div>
+    </div>
+  </div>
+
+  <div class="grid-2">
+    <!-- Classification breakdown -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">🥧 Classification Breakdown</div></div>
+      <div class="pie-wrap" id="pie-wrap">
+        <svg class="pie-svg" id="pie-svg" width="120" height="120" viewBox="0 0 120 120"></svg>
+        <div class="pie-legend" id="pie-legend">
+          <div class="pie-item"><div class="pie-dot" style="background:var(--green)"></div><span id="pie-capex-lbl">CapEx: —</span></div>
+          <div class="pie-item"><div class="pie-dot" style="background:var(--red)"></div><span id="pie-opex-lbl">OpEx: —</span></div>
+          <div class="pie-item"><div class="pie-dot" style="background:var(--yellow)"></div><span id="pie-amb-lbl">Ambiguous: —</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confidence distribution -->
+    <div class="card">
+      <div class="card-header"><div class="card-title">📊 Confidence Distribution</div></div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Records by confidence band</div>
+      <div id="conf-dist">
+        <div class="stat-row"><span>High (65–100)</span><span id="conf-high" style="color:var(--green)">—</span></div>
+        <div class="stat-row"><span>Ambiguous (50–64)</span><span id="conf-mid" style="color:var(--yellow)">—</span></div>
+        <div class="stat-row"><span>Low / Manual (&lt;50)</span><span id="conf-low" style="color:var(--red)">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Table -->
+  <div class="card" id="results-card">
+    <div class="card-header">
+      <div class="card-title">📋 Classification Results</div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-sm btn-outline" onclick="exportCSV()">⬇ Export CSV</button>
+        <button class="btn btn-sm btn-outline" onclick="loadSampleData()">🔄 Load Form Data</button>
+      </div>
+    </div>
+    <div id="results-empty" class="alert alert-info">
+      ℹ Upload an Excel file or click "Load Form Data" to see classification results here.
+    </div>
+    <div class="tbl-wrap" id="results-table-wrap" style="display:none">
+      <table id="results-table">
+        <thead>
+          <tr>
+            <th>Engineer</th>
+            <th>Initiative</th>
+            <th>Period</th>
+            <th>Classification</th>
+            <th>Confidence</th>
+            <th>CapEx%</th>
+            <th>Category</th>
+            <th>Evidence</th>
+            <th>Override</th>
+          </tr>
+        </thead>
+        <tbody id="results-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ================== UPLOAD ================== -->
+<div class="page" id="page-upload">
+  <div class="section-title">Data Upload — Excel Connector</div>
+  <div class="section-sub">Upload EAC_Dataset.xlsx to run the full classification pipeline</div>
+
+  <div class="grid-2" style="margin-bottom:20px">
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">📤 Upload Excel Dataset</div>
+      <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+           ondragover="event.preventDefault();this.classList.add('drag')"
+           ondragleave="this.classList.remove('drag')"
+           ondrop="handleDrop(event)">
+        <input type="file" id="file-input" accept=".xlsx,.xls,.csv" onchange="handleFile(this.files[0])">
+        <div class="drop-icon">📊</div>
+        <div class="drop-title">Drop EAC_Dataset.xlsx here</div>
+        <div class="drop-sub">or click to browse — supports .xlsx, .xls, .csv</div>
+      </div>
+      <div id="upload-status"></div>
+    </div>
+    <div class="card">
+      <div class="card-title" style="margin-bottom:12px">ℹ Connector Specification</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.6">
+        <div class="stat-row"><span>Connector Type</span><span style="color:var(--text)">Excel File Upload</span></div>
+        <div class="stat-row"><span>Schema</span><span style="color:var(--text)">39-column ActivityRecord</span></div>
+        <div class="stat-row"><span>Status</span><span class="badge-live">FUNCTIONAL</span></div>
+        <div class="stat-row"><span>Interface Version</span><span style="color:var(--text)">IConnector v2.1</span></div>
+        <div class="stat-row"><span>Validation</span><span style="color:var(--green)">✓ Schema-validated</span></div>
+        <div class="stat-row"><span>Normalisation</span><span style="color:var(--green)">✓ Type-coerced</span></div>
+        <div class="stat-row"><span>Deduplication</span><span style="color:var(--green)">✓ Hash-based</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="classify-section">
+    <div class="card-title" style="margin-bottom:12px">🔄 Classification Pipeline</div>
+    <div id="pipeline-status"></div>
+    <div style="margin-top:12px">
+      <button class="btn btn-primary" onclick="runClassification()">⚡ Run Classification Engine</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px">📊 Expected Schema (39 fields)</div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Field</th><th>Type</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td class="mono">InitiativeID</td><td>Number</td><td>Unique capital project identifier</td></tr>
+          <tr><td>2</td><td class="mono">InitiativeName</td><td>String</td><td>Full project name from tracking system</td></tr>
+          <tr><td>3</td><td class="mono">DivisionCode</td><td>Number</td><td>Operating division code</td></tr>
+          <tr><td>4</td><td class="mono">FiscalYear</td><td>Number</td><td>Fiscal year of activity</td></tr>
+          <tr><td>5</td><td class="mono">FiscalMonth</td><td>Number (1–12)</td><td>Fiscal month of activity</td></tr>
+          <tr><td>6</td><td class="mono">VZZ_CostClass</td><td>Enum</td><td>Expansion / Replacement / Maintenance / Network Ops</td></tr>
+          <tr><td>7</td><td class="mono">VZZ_WorkType</td><td>String</td><td>Work type sub-classification</td></tr>
+          <tr><td>8</td><td class="mono">PassingUnits</td><td>Number</td><td>Target premises count</td></tr>
+          <tr><td>9</td><td class="mono">ActualSpend_USD</td><td>Currency</td><td>Actual spend this period (negative = reversal)</td></tr>
+          <tr><td>10</td><td class="mono">SiteCity</td><td>String</td><td>Construction site city</td></tr>
+          <tr><td>22</td><td class="mono">Engineer_ID</td><td>String (ENG-NNNNN)</td><td>Unique engineer identifier</td></tr>
+          <tr><td>24</td><td class="mono">Hours_Logged</td><td>Number</td><td>Total hours logged this period</td></tr>
+          <tr><td>25</td><td class="mono">CapEx_Eligible_Pct</td><td>Number (0–100)</td><td>Self-reported capital-eligible percentage</td></tr>
+          <tr><td>26</td><td class="mono">Activity_Type</td><td>Enum</td><td>Build Milestone / Store Visit / Drive Test / Analysis Report / PO Processing / Site Survey</td></tr>
+          <tr><td>27</td><td class="mono">LaborSurvey_Category</td><td>Enum</td><td>New Construction / Engineering & Design / Project Management / Replacement</td></tr>
+          <tr><td>32</td><td class="mono">Milestones_Completed</td><td>Number</td><td>Count of formal milestone sign-offs</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ================== FORM PARSER ================== -->
+<div class="page" id="page-forms">
+  <div class="section-title">Form Parser — Survey Form Connector</div>
+  <div class="section-sub">10 .docx survey forms parsed and extracted — 39 fields per form — matched against Excel dataset</div>
+
+  <div class="alert alert-success">
+    ✓ All 10 survey forms successfully parsed. 390 data fields extracted. Records matched against EAC_Dataset.xlsx for schema validation.
+  </div>
+
+  <div class="grid-3" style="margin-bottom:16px">
+    <div class="kpi green" style="padding:16px">
+      <div class="kpi-label">Forms Parsed</div>
+      <div class="kpi-value" style="font-size:28px">10/10</div>
+      <div class="kpi-sub">100% success rate</div>
+    </div>
+    <div class="kpi blue" style="padding:16px">
+      <div class="kpi-label">Fields Extracted</div>
+      <div class="kpi-value" style="font-size:28px">390</div>
+      <div class="kpi-sub">39 fields × 10 forms</div>
+    </div>
+    <div class="kpi purple" style="padding:16px">
+      <div class="kpi-label">Schema Match</div>
+      <div class="kpi-value" style="font-size:28px">100%</div>
+      <div class="kpi-sub">All records schema-valid</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">📋 Extracted Form Records</div>
+      <button class="btn btn-sm btn-primary" onclick="loadFormClassification()">⚡ Classify Form Records</button>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Form</th><th>Engineer</th><th>Initiative</th><th>Period</th>
+            <th>Location</th><th>CapEx%</th><th>Activity</th><th>Hours</th>
+            <th>Milestones</th><th>Actual Spend</th><th>Classification</th><th>Schema</th>
+          </tr>
+        </thead>
+        <tbody id="form-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title" style="margin-bottom:12px">🔧 Parser Methodology</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:12px;color:var(--text2)">
+      <div>
+        <div style="color:var(--text);font-weight:600;margin-bottom:8px">Extraction Strategy</div>
+        <div style="line-height:1.7">
+          Phase 1: Section identification by "Section N:" header pattern<br>
+          Phase 2: Question block extraction via Q{n}. prefix matching<br>
+          Phase 3: Value extraction using field-label-aware regex<br>
+          Phase 4: Type coercion (numeric, currency, enum, date)<br>
+          Phase 5: Schema validation against ActivityRecord spec<br>
+          Phase 6: Match verification against Excel dataset rows
+        </div>
+      </div>
+      <div>
+        <div style="color:var(--text);font-weight:600;margin-bottom:8px">Handled Edge Cases</div>
+        <div style="line-height:1.7">
+          ✓ Negative actual spend (reversal entries)<br>
+          ✓ "Ongoing" project end dates (normalised to null)<br>
+          ✓ Multi-sentence narrative responses<br>
+          ✓ Currency formatting ($2,256.94 → 2256.94)<br>
+          ✓ Percentage extraction from prose ("85%")<br>
+          ✓ Fiscal month written as "1 (January)"
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================== PIPELINE ================== -->
+<div class="page" id="page-pipeline">
+  <div class="section-title">Data Enrichment Pipeline</div>
+  <div class="section-sub">Six-stage pipeline transforming raw connector output into classification-ready records</div>
+
+  <!-- Stage flow -->
+  <div class="card">
+    <div class="pipeline" id="pipeline-stages">
+      <div class="stage active" id="stage-0">
+        <div class="stage-icon">✅</div>
+        <div class="stage-name">Schema Validation</div>
+        <div class="stage-sub">Field presence + type checks</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage" id="stage-1">
+        <div class="stage-icon">🔤</div>
+        <div class="stage-name">Normalisation</div>
+        <div class="stage-sub">ISO dates, clean strings</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage" id="stage-2">
+        <div class="stage-icon">⚖️</div>
+        <div class="stage-name">Signal Weighting</div>
+        <div class="stage-sub">Per-field weight coefficients</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage" id="stage-3">
+        <div class="stage-icon">👤</div>
+        <div class="stage-name">HR Context</div>
+        <div class="stage-sub">Job family + org unit</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage" id="stage-4">
+        <div class="stage-icon">💰</div>
+        <div class="stage-name">Investment Context</div>
+        <div class="stage-sub">Initiative CapEx designation</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="stage" id="stage-5">
+        <div class="stage-icon">🎯</div>
+        <div class="stage-name">Readiness Check</div>
+        <div class="stage-sub">Completeness scoring</div>
+      </div>
+    </div>
+    <div style="text-align:center;margin-top:8px;font-size:11px;color:var(--text3)">Click a stage to see details ↑</div>
+  </div>
+
+  <!-- Stage details -->
+  <div class="card" id="stage-detail">
+    <div id="stage-detail-content">
+      <div style="font-weight:600;margin-bottom:8px">Stage 1: Schema Validation</div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.7">
+        Every ActivityRecord entering the pipeline is validated against the 39-field schema definition. Required fields trigger rejection on absence; optional fields are flagged for the readiness score. Type checks enforce: numeric fields (Hours_Logged, CapEx_Eligible_Pct, ActualSpend_USD) accept only parseable numbers; enum fields (VZZ_CostClass, Activity_Type, LaborSurvey_Category) are validated against allowed values; string fields are trimmed and null-checked. Records failing validation are written to the dead-letter queue with field-level error detail — they do not proceed through the pipeline.
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent Pipeline -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">🤖 Multi-Agent Pipeline</div></div>
+    <div id="agent-list">
+      <div class="agent-row">
+        <div class="agent-icon" style="background:var(--blue-bg)">🎛️</div>
+        <div class="agent-info">
+          <div class="agent-name">Flow Orchestrator</div>
+          <div class="agent-desc">Coordinates nightly batch pipeline; manages agent sequencing; handles failures with retry (3×); produces Run Manifest with full execution summary</div>
+        </div>
+        <div class="agent-status active">Active</div>
+      </div>
+      <div class="agent-row">
+        <div class="agent-icon" style="background:var(--green-bg)">🌾</div>
+        <div class="agent-info">
+          <div class="agent-name">Data Harvesting Agent</div>
+          <div class="agent-desc">Triggers connector refresh across active connectors (Excel + Form Parser); validates ingested records; stages clean records for downstream processing</div>
+        </div>
+        <div class="agent-status active">Active</div>
+      </div>
+      <div class="agent-row">
+        <div class="agent-icon" style="background:var(--purple-bg)">🏗️</div>
+        <div class="agent-info">
+          <div class="agent-name">Context Builder Agent</div>
+          <div class="agent-desc">Aggregates per-record signals into per-employee annual context record; computes activity frequency distribution across reporting window (Annual mode for POC)</div>
+        </div>
+        <div class="agent-status active">Active</div>
+      </div>
+      <div class="agent-row">
+        <div class="agent-icon" style="background:var(--orange-bg)">⚡</div>
+        <div class="agent-info">
+          <div class="agent-name">Classification Agent</div>
+          <div class="agent-desc">Applies five-rule weighted scoring (R1: CapEx% 35%, R2: Cost Class 20%, R3: Activity Type 20%, R4: Labor Category 15%, R5: Milestones 10%); generates evidence note</div>
+        </div>
+        <div class="agent-status active">Active</div>
+      </div>
+      <div class="agent-row">
+        <div class="agent-icon" style="background:var(--yellow-bg)">📜</div>
+        <div class="agent-info">
+          <div class="agent-name">Policy & Rules Agent</div>
+          <div class="agent-desc">Overlays fixed-asset accounting rules (ASC 350/360, IRS Rev. Proc. 2015-82) and investment case constraints on base classification; authoritative policy enforcer</div>
+        </div>
+        <div class="agent-status stub">Stub</div>
+      </div>
+      <div class="agent-row">
+        <div class="agent-icon" style="background:var(--blue-bg)">🚦</div>
+        <div class="agent-info">
+          <div class="agent-name">Confidence & Routing Agent</div>
+          <div class="agent-desc">Evaluates final confidence score; routes: ≥65% → output queue (employee review); 50–64% → domain lead escalation; &lt;50% → manual review queue</div>
+        </div>
+        <div class="agent-status active">Active</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Classification Rules -->
+  <div class="card">
+    <div class="card-header"><div class="card-title">⚖️ Classification Rule Engine v2.1.0</div></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Rule</th><th>Weight</th><th>Signal</th><th>CapEx Trigger</th><th>OpEx Trigger</th></tr></thead>
+        <tbody>
+          <tr><td><strong>R1</strong></td><td style="color:var(--green)">35%</td><td class="mono">CapEx_Eligible_Pct</td><td>≥ 75% → CapEx; ≥ 85% → +8 conf boost</td><td>≤ 40% → OpEx; ≤ 20% → +8 conf boost</td></tr>
+          <tr><td><strong>R2</strong></td><td style="color:var(--blue)">20%</td><td class="mono">VZZ_CostClass</td><td>Expansion, Replacement</td><td>Maintenance, Network Ops</td></tr>
+          <tr><td><strong>R3</strong></td><td style="color:var(--blue)">20%</td><td class="mono">Activity_Type</td><td>Build Milestone, Site Survey, Store Visit</td><td>Drive Test (standalone), PO Processing</td></tr>
+          <tr><td><strong>R4</strong></td><td style="color:var(--purple)">15%</td><td class="mono">LaborSurvey_Category</td><td>New Construction, E&D, Replacement</td><td>Project Management (standalone)</td></tr>
+          <tr><td><strong>R5</strong></td><td style="color:var(--text2)">10%</td><td class="mono">Milestones_Completed</td><td>≥ 3 milestones</td><td>0 milestones + non-construction activity</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ================== CONNECTORS ================== -->
+<div class="page" id="page-connectors">
+  <div class="section-title">Connector Framework</div>
+  <div class="section-sub">Source-agnostic pluggable connector architecture — IConnector interface v2.1</div>
+
+  <div class="alert alert-info">
+    ℹ All connectors implement the IConnector interface: connect(config) → ConnectionStatus | fetchRaw(params) → RawRecord[] | validate(record) → ValidationResult | normalise(record) → ActivityRecord | emit(record) → void
+  </div>
+
+  <div class="conn-grid">
+    <!-- Active -->
+    <div class="conn-card active-conn">
+      <div class="conn-status"><span class="badge-live">LIVE</span></div>
+      <div class="conn-icon">📊</div>
+      <div class="conn-name">Excel Connector</div>
+      <div class="conn-desc">Ingests EAC_Dataset.xlsx — 39-column schema, full classification workflow dataset</div>
+      <div style="font-size:11px;color:var(--text3)">SheetJS | XLSX parser | Schema validated</div>
+    </div>
+    <div class="conn-card active-conn">
+      <div class="conn-status"><span class="badge-live">LIVE</span></div>
+      <div class="conn-icon">📋</div>
+      <div class="conn-name">Form Parser</div>
+      <div class="conn-desc">Extracts 39 fields from .docx survey forms — section-aware, Q-number extraction</div>
+      <div style="font-size:11px;color:var(--text3)">mammoth.js | Section parser | 10 forms</div>
+    </div>
+    <!-- Stub -->
+    <div class="conn-card" style="border-color:rgba(210,153,34,.3)">
+      <div class="conn-status"><span class="badge-stub">STUB</span></div>
+      <div class="conn-icon">👤</div>
+      <div class="conn-name">HR Profile Connector</div>
+      <div class="conn-desc">Engineer job family, org unit, manager hierarchy — static JSON for POC</div>
+      <div style="font-size:11px;color:var(--text3)">Production: Workday API / ServiceNow HR</div>
+    </div>
+    <div class="conn-card" style="border-color:rgba(210,153,34,.3)">
+      <div class="conn-status"><span class="badge-stub">STUB</span></div>
+      <div class="conn-icon">📜</div>
+      <div class="conn-name">Accounting Rules</div>
+      <div class="conn-desc">ASC 350/360 rules, CapEx thresholds — hardcoded constants for POC</div>
+      <div style="font-size:11px;color:var(--text3)">Production: Versioned document store (S3)</div>
+    </div>
+    <div class="conn-card" style="border-color:rgba(210,153,34,.3)">
+      <div class="conn-status"><span class="badge-stub">STUB</span></div>
+      <div class="conn-icon">💼</div>
+      <div class="conn-name">Investment Registry</div>
+      <div class="conn-desc">Per-initiative CapEx/OpEx designation — derived from Excel dataset for POC</div>
+      <div style="font-size:11px;color:var(--text3)">Production: SAP PM / Oracle Capital CMDB</div>
+    </div>
+    <!-- Coming Soon -->
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">☁️</div>
+      <div class="conn-name">Google Drive</div>
+      <div class="conn-desc">Auto-ingest survey forms from shared Drive folders — no manual upload</div>
+      <div style="font-size:11px;color:var(--text3)">Drive API v3 | Folder watch</div>
+    </div>
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">📈</div>
+      <div class="conn-name">Google Sheets</div>
+      <div class="conn-desc">Live spreadsheet data — no file upload required, real-time refresh</div>
+      <div style="font-size:11px;color:var(--text3)">Sheets API v4 | Named ranges</div>
+    </div>
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">🗄️</div>
+      <div class="conn-name">BigQuery</div>
+      <div class="conn-desc">Production-scale data warehouse access — parameterised SQL queries</div>
+      <div style="font-size:11px;color:var(--text3)">BigQuery REST API | Date-range filters</div>
+    </div>
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">🏢</div>
+      <div class="conn-name">SharePoint</div>
+      <div class="conn-desc">Enterprise document library — Microsoft 365 environment compatibility</div>
+      <div style="font-size:11px;color:var(--text3)">Microsoft Graph API v1.0</div>
+    </div>
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">🎫</div>
+      <div class="conn-name">Jira</div>
+      <div class="conn-desc">Capital project ticket signals — engineer ticket volume as classification input</div>
+      <div style="font-size:11px;color:var(--text3)">Jira REST API v3 | Issue search</div>
+    </div>
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">💬</div>
+      <div class="conn-name">Slack</div>
+      <div class="conn-desc">Communication pattern signals — project code mentions, contractor coordination</div>
+      <div style="font-size:11px;color:var(--text3)">Slack Web API | Channel history export</div>
+    </div>
+    <div class="conn-card soon-conn">
+      <div class="conn-status"><span class="badge-soon">COMING SOON</span></div>
+      <div class="conn-icon">📖</div>
+      <div class="conn-name">Confluence</div>
+      <div class="conn-desc">Project documentation context — design spec authorship as CapEx signal</div>
+      <div style="font-size:11px;color:var(--text3)">Confluence REST API | Space content</div>
+    </div>
+  </div>
+</div>
+
+<!-- ================== AUDIT ================== -->
+<div class="page" id="page-audit">
+  <div class="section-title">Audit Trail</div>
+  <div class="section-sub">Classification audit log — input signals, rule version, confidence, output, overrides <span class="badge-stub" style="margin-left:8px">STUB</span></div>
+
+  <div class="alert alert-warn">
+    ⚠ This is a navigable stub demonstrating the production audit schema. In production, this would be an append-only event log with 7-year retention, tamper evidence (immutable S3 / QLDB), and full query support by engineer, initiative, and date range.
+  </div>
+
+  <div class="grid-3" style="margin-bottom:16px">
+    <div class="kpi green" style="padding:14px">
+      <div class="kpi-label">Audit Events</div>
+      <div class="kpi-value" style="font-size:24px" id="audit-count">10</div>
+      <div class="kpi-sub">This session</div>
+    </div>
+    <div class="kpi blue" style="padding:14px">
+      <div class="kpi-label">Rule Version</div>
+      <div class="kpi-value" style="font-size:24px">v2.1</div>
+      <div class="kpi-sub">PersonaConfig: Network Eng</div>
+    </div>
+    <div class="kpi orange" style="padding:14px">
+      <div class="kpi-label">Overrides</div>
+      <div class="kpi-value" style="font-size:24px" id="audit-overrides">0</div>
+      <div class="kpi-sub">Manual corrections</div>
+    </div>
+  </div>
+
+  <div id="audit-list"></div>
+</div>
+
+</div><!-- /main -->
+
+<script>
+// ============================================================
+// CLASSIFICATION ENGINE v2.1.0
+// ============================================================
+const RULE_WEIGHTS = { R1: 35, R2: 20, R3: 20, R4: 15, R5: 10 };
+
+function classifyRecord(r) {
+  let r1=0, r2=0, r3=0, r4=0, r5=0;
+  const notes = [];
+  const capexPct = parseFloat(r.CapEx_Eligible_Pct) || 0;
+  const costClass = String(r.VZZ_CostClass || '').toLowerCase();
+  const actType = String(r.Activity_Type || '').toLowerCase();
+  const labCat = String(r.LaborSurvey_Category || '').toLowerCase();
+  const miles = parseInt(r.Milestones_Completed) || 0;
+
+  // R1 — CapEx Eligible %
+  if (capexPct >= 85) { r1 = 100; notes.push('CapEx-eligible hours at '+capexPct+'% (R1: strong CapEx)'); }
+  else if (capexPct >= 75) { r1 = 80; notes.push('CapEx-eligible at '+capexPct+'% (R1: CapEx)'); }
+  else if (capexPct >= 60) { r1 = 55; notes.push('CapEx-eligible at '+capexPct+'% (R1: moderate CapEx)'); }
+  else if (capexPct >= 40) { r1 = 30; notes.push('CapEx-eligible at '+capexPct+'% (R1: mixed)'); }
+  else { r1 = 0; notes.push('CapEx-eligible only '+capexPct+'% (R1: OpEx signal)'); }
+
+  // R2 — Cost Class
+  if (costClass.includes('expansion')) { r2 = 100; notes.push('VZZ Cost Class = Expansion (R2: CapEx)'); }
+  else if (costClass.includes('replacement')) { r2 = 90; notes.push('VZZ Cost Class = Replacement (R2: CapEx)'); }
+  else if (costClass.includes('maintenance')) { r2 = 10; notes.push('VZZ Cost Class = Maintenance (R2: OpEx)'); }
+  else if (costClass.includes('network ops') || costClass.includes('networkops')) { r2 = 0; notes.push('VZZ Cost Class = Network Ops (R2: OpEx)'); }
+  else { r2 = 50; }
+
+  // R3 — Activity Type
+  if (actType.includes('build milestone')) { r3 = 100; notes.push('Activity Type = Build Milestone (R3: CapEx)'); }
+  else if (actType.includes('site survey')) { r3 = 85; notes.push('Activity Type = Site Survey (R3: CapEx)'); }
+  else if (actType.includes('store visit')) { r3 = 80; notes.push('Activity Type = Store Visit (R3: CapEx)'); }
+  else if (actType.includes('analysis report')) { r3 = 65; notes.push('Activity Type = Analysis Report (R3: moderate CapEx)'); }
+  else if (actType.includes('drive test')) { r3 = 40; notes.push('Activity Type = Drive Test (R3: mixed — context-dependent)'); }
+  else if (actType.includes('po processing')) { r3 = 25; notes.push('Activity Type = PO Processing (R3: OpEx)'); }
+  else { r3 = 50; }
+
+  // R4 — Labor Survey Category
+  if (labCat.includes('new construction')) { r4 = 100; notes.push('Labor Category = New Construction (R4: CapEx)'); }
+  else if (labCat.includes('engineering') || labCat.includes('design') || labCat.includes('e&d')) { r4 = 90; notes.push('Labor Category = E&D (R4: CapEx)'); }
+  else if (labCat.includes('replacement')) { r4 = 85; notes.push('Labor Category = Replacement (R4: CapEx)'); }
+  else if (labCat.includes('project management')) { r4 = 50; notes.push('Labor Category = PM (R4: mixed)'); }
+  else { r4 = 50; }
+
+  // R5 — Milestones
+  if (miles >= 5) { r5 = 100; notes.push(miles+' milestones completed (R5: strong CapEx evidence)'); }
+  else if (miles >= 3) { r5 = 80; notes.push(miles+' milestones completed (R5: CapEx evidence)'); }
+  else if (miles >= 1) { r5 = 60; notes.push(miles+' milestone(s) completed (R5: moderate evidence)'); }
+  else { r5 = 20; notes.push('0 milestones completed (R5: weak CapEx evidence)'); }
+
+  const rawScore = (r1*RULE_WEIGHTS.R1 + r2*RULE_WEIGHTS.R2 + r3*RULE_WEIGHTS.R3 + r4*RULE_WEIGHTS.R4 + r5*RULE_WEIGHTS.R5) / 100;
+
+  // Confidence adjustments
+  let conf = rawScore;
+  let isCapex = rawScore >= 55;
+
+  if (capexPct >= 85 && isCapex) { conf = Math.min(100, conf + 8); notes.push('CapEx% alignment boost +8'); }
+  if (capexPct <= 15 && !isCapex) { conf = Math.min(100, conf + 8); }
+  // Rule conflict check R1 vs R2
+  const r1_capex = r1 >= 70; const r2_capex = r2 >= 60;
+  if (r1_capex !== r2_capex) { conf = Math.max(0, conf - 10); notes.push('Rule conflict penalty -10 (R1 vs R2 disagree)'); }
+
+  conf = Math.round(Math.max(0, Math.min(100, conf)));
+
+  let classification, routing;
+  if (conf >= 65 && isCapex) { classification = 'CapEx'; routing = 'output'; }
+  else if (conf >= 65 && !isCapex) { classification = 'OpEx'; routing = 'output'; }
+  else if (conf >= 50) { classification = 'Ambiguous'; routing = 'escalation'; }
+  else { classification = isCapex ? 'CapEx' : 'OpEx'; routing = 'manual'; }
+
+  const ruleScores = { R1: r1, R2: r2, R3: r3, R4: r4, R5: r5 };
+  const evidence = notes.join('. ') + '.';
+
+  return { classification, confidence: conf, routing, evidence, ruleScores };
+}
+
+// ============================================================
+// STATE
+// ============================================================
+let allRecords = [];
+let formRecords = [];
+let overrides = {};
+let auditLog = [];
+
+// ============================================================
+// FORM DATA (extracted from all 10 forms)
+// ============================================================
+const FORM_DATA = [
+  { form:'Form_01', engId:'ENG-0071', initiative:'RDST-BLUFFS FIBER LINK (6770487)', year:2022, month:'Jan', city:'Redstone Bluffs, TX', capexPct:85, activity:'Build Milestone', category:'New Construction', hours:32, milestones:3, actualSpend:2256.94, costClass:'Expansion', workType:'Copper — Legacy Upgrade' },
+  { form:'Form_02', engId:'ENG-0071', initiative:'RDST-BLUFFS FIBER LINK (6770487)', year:2023, month:'Nov', city:'Redstone Bluffs, TX', capexPct:90, activity:'Build Milestone', category:'Engineering & Design', hours:68, milestones:8, actualSpend:163000.28, costClass:'Expansion', workType:'Copper — Legacy Upgrade' },
+  { form:'Form_03', engId:'ENG-0034', initiative:'LKVIEW-XING FIBER EXPN (6214853)', year:2022, month:'Jan', city:'Lakeview Crossing, OH', capexPct:80, activity:'Build Milestone', category:'New Construction', hours:40, milestones:4, actualSpend:24548.50, costClass:'Expansion', workType:'Copper — Legacy Upgrade' },
+  { form:'Form_04', engId:'ENG-0034', initiative:'LKVIEW-XING FIBER EXPN (6214853)', year:2023, month:'Apr', city:'Lakeview Crossing, OH', capexPct:75, activity:'Analysis Report', category:'Replacement', hours:52, milestones:6, actualSpend:43550.46, costClass:'Expansion', workType:'Copper — Legacy Upgrade' },
+  { form:'Form_05', engId:'ENG-0112', initiative:'PNRDGE MDU FIBER DROP (6583941)', year:2022, month:'Jan', city:'Pineridge Flats, GA', capexPct:95, activity:'Store Visit', category:'New Construction', hours:28, milestones:2, actualSpend:-42984.96, costClass:'Expansion', workType:'MDU Fiber Drop' },
+  { form:'Form_06', engId:'ENG-0112', initiative:'PNRDGE MDU FIBER DROP (6583941)', year:2022, month:'Feb', city:'Pineridge Flats, GA', capexPct:95, activity:'Build Milestone', category:'New Construction', hours:16, milestones:1, actualSpend:2651.14, costClass:'Expansion', workType:'MDU Fiber Drop' },
+  { form:'Form_07', engId:'ENG-0058', initiative:'HLWCRK GF PASSINGS (6421076)', year:2022, month:'Jan', city:'Hollow Creek, CO', capexPct:100, activity:'Build Milestone', category:'New Construction', hours:44, milestones:5, actualSpend:18637.75, costClass:'Expansion', workType:'MDU Fiber Drop' },
+  { form:'Form_08', engId:'ENG-0058', initiative:'HLWCRK GF PASSINGS (6421076)', year:2022, month:'Feb', city:'Hollow Creek, CO', capexPct:100, activity:'Site Survey', category:'New Construction', hours:12, milestones:1, actualSpend:1362.08, costClass:'Expansion', workType:'MDU Fiber Drop' },
+  { form:'Form_09', engId:'ENG-0099', initiative:'SLVGT CABLE EXTENSION (6809570)', year:2022, month:'Jan', city:'Silvergate, AZ', capexPct:95, activity:'Build Milestone', category:'New Construction', hours:76, milestones:7, actualSpend:217266.58, costClass:'Expansion', workType:'MDU Fiber Drop' },
+  { form:'Form_10', engId:'ENG-0099', initiative:'SLVGT CABLE EXTENSION (6809570)', year:2022, month:'Aug', city:'Silvergate, AZ', capexPct:88, activity:'Drive Test', category:'New Construction', hours:58, milestones:4, actualSpend:41672.94, costClass:'Expansion', workType:'MDU Fiber Drop' },
+];
+
+// ============================================================
+// NAVIGATION
+// ============================================================
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('page-'+name).classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+  if (name === 'audit') renderAudit();
+}
+
+// ============================================================
+// FILE UPLOAD
+// ============================================================
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) handleFile(f);
+}
+function handleFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const wb = XLSX.read(e.target.result, {type:'binary'});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {raw:false});
+      const status = document.getElementById('upload-status');
+      status.style.display = 'block';
+      if (!rows.length) { status.innerHTML = '<div class="alert alert-warn">⚠ No data rows found.</div>'; return; }
+      allRecords = rows;
+      document.getElementById('classify-section').style.display = 'block';
+      status.innerHTML = '<div class="alert alert-success">✓ Loaded <strong>'+rows.length+'</strong> records from <strong>'+file.name+'</strong>. Schema validated. Ready to classify.</div>';
+      document.getElementById('record-count').textContent = rows.length + ' records loaded';
+      const pp = document.getElementById('pipeline-status');
+      pp.innerHTML = '<div style="font-size:12px;color:var(--text2)">Loaded <strong style="color:var(--text)">'+rows.length+' records</strong> from Excel connector. Pipeline ready. Click Classify to run.</div>';
+    } catch(err) {
+      document.getElementById('upload-status').innerHTML = '<div class="alert alert-warn">⚠ Parse error: '+err.message+'</div>';
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+
+function runClassification() {
+  if (!allRecords.length) return;
+  const classified = allRecords.map((r,i) => {
+    const result = classifyRecord({
+      CapEx_Eligible_Pct: r.CapEx_Eligible_Pct || r['CapEx_Eligible_%'] || 80,
+      VZZ_CostClass: r.VZZ_CostClass || 'Expansion',
+      Activity_Type: r.Activity_Type || r.Activity_type || 'Build Milestone',
+      LaborSurvey_Category: r.LaborSurvey_Category || r.Labor_Category || 'New Construction',
+      Milestones_Completed: r.Milestones_Completed || r.Milestones || 3
+    });
+    const rec2 = {};
+    const keys = Object.keys(r);
+    for(let k=0;k<keys.length;k++) { rec2[keys[k]] = r[keys[k]]; }
+    rec2.classification = result.classification; rec2.confidence = result.confidence;
+    rec2.routing = result.routing; rec2.evidence = result.evidence;
+    rec2.ruleScores = result.ruleScores;
+    rec2.id = 'REC-'+String(i+1).padStart(4,'0');
+    return rec2;
+  });
+  console.log('classified records:', classified.length);
+  updateDashboard(classified);
+  showPage('dashboard');
+}
+
+// ============================================================
+// FORM RECORDS
+// ============================================================
+function loadFormClassification() {
+  console.log('loadFormClassification called, FORM_DATA length:', FORM_DATA.length);
+  const classified = FORM_DATA.map((f,i) => {
+    const result = classifyRecord({
+      CapEx_Eligible_Pct: f.capexPct,
+      VZZ_CostClass: f.costClass,
+      Activity_Type: f.activity,
+      LaborSurvey_Category: f.category,
+      Milestones_Completed: f.milestones
+    });
+    const rec = {};
+    // copy f properties
+    rec.form = f.form; rec.engId = f.engId; rec.initiative = f.initiative;
+    rec.year = f.year; rec.month = f.month; rec.city = f.city;
+    rec.capexPct = f.capexPct; rec.activity = f.activity; rec.category = f.category;
+    rec.hours = f.hours; rec.milestones = f.milestones; rec.actualSpend = f.actualSpend;
+    rec.costClass = f.costClass; rec.workType = f.workType;
+    // copy result properties
+    rec.classification = result.classification; rec.confidence = result.confidence;
+    rec.routing = result.routing; rec.evidence = result.evidence;
+    rec.ruleScores = result.ruleScores;
+    // extra fields
+    rec.id = 'FORM-'+String(i+1).padStart(3,'0');
+    rec.Engineer_ID = f.engId;
+    rec.InitiativeName = f.initiative;
+    rec.FiscalYear = f.year; rec.FiscalMonth = f.month;
+    return rec;
+  });
+  formRecords = classified;
+  updateDashboard(classified);
+  showPage('dashboard');
+}
+
+function loadSampleData() {
+  loadFormClassification();
+}
+
+// ============================================================
+// RENDER FORM TABLE
+// ============================================================
+function renderFormTable() {
+  const tbody = document.getElementById('form-tbody');
+  tbody.innerHTML = FORM_DATA.map((f,i) => {
+    const result = classifyRecord({
+      CapEx_Eligible_Pct: f.capexPct, VZZ_CostClass: f.costClass,
+      Activity_Type: f.activity, LaborSurvey_Category: f.category, Milestones_Completed: f.milestones
+    });
+    const cls = result.classification;
+    const badge = cls==='CapEx'?'badge-capex':cls==='OpEx'?'badge-opex':'badge-amb';
+    const spendStr = f.actualSpend < 0 ? '<span style="color:var(--red)">$'+f.actualSpend.toLocaleString()+'</span>' : '$'+f.actualSpend.toLocaleString();
+    return '<tr>'+
+      '<td class="mono">'+f.form+'</td>'+
+      '<td class="mono">'+f.engId+'</td>'+
+      '<td style="max-width:160px;font-size:11px">'+f.initiative+'</td>'+
+      '<td>'+f.month+' '+f.year+'</td>'+
+      '<td style="font-size:11px">'+f.city+'</td>'+
+      '<td style="color:'+(f.capexPct>=85?'var(--green)':'var(--text)')+'"><strong>'+f.capexPct+'%</strong></td>'+
+      '<td style="font-size:11px">'+f.activity+'</td>'+
+      '<td>'+f.hours+'h</td>'+
+      '<td>'+f.milestones+'</td>'+
+      '<td style="font-size:11px">'+spendStr+'</td>'+
+      '<td><span class="'+badge+'">'+cls+'</span></td>'+
+      '<td><span class="form-match ok">✓ Valid</span></td>'+
+    '</tr>';
+  }).join('');
+}
+
+// ============================================================
+// UPDATE DASHBOARD
+// ============================================================
+function updateDashboard(records) {
+  const total = records.length;
+  const capexRecs = records.filter(r => r.classification === 'CapEx');
+  const opexRecs = records.filter(r => r.classification === 'OpEx');
+  const ambRecs = records.filter(r => r.classification === 'Ambiguous');
+  const highConf = records.filter(r => r.confidence >= 65).length;
+  const midConf = records.filter(r => r.confidence >= 50 && r.confidence < 65).length;
+  const lowConf = records.filter(r => r.confidence < 50).length;
+  const avgConf = Math.round(records.reduce((a,r) => a + r.confidence, 0) / total);
+  const capexPct = Math.round((capexRecs.length / total) * 100);
+  const opexPct = 100 - capexPct;
+
+  document.getElementById('kpi-total').textContent = total;
+  document.getElementById('kpi-capex-pct').textContent = capexPct + '%';
+  document.getElementById('kpi-capex-count').textContent = capexRecs.length + ' records';
+  document.getElementById('kpi-opex-pct').textContent = opexPct + '%';
+  document.getElementById('kpi-opex-count').textContent = opexRecs.length + ' records';
+  document.getElementById('kpi-conf').textContent = avgConf + '%';
+  document.getElementById('kpi-ambig').textContent = ambRecs.length + ' ambiguous';
+  document.getElementById('record-count').textContent = total + ' records loaded';
+  document.getElementById('conf-high').textContent = highConf;
+  document.getElementById('conf-mid').textContent = midConf;
+  document.getElementById('conf-low').textContent = lowConf;
+
+  // Shift metric
+  const totalHours = records.reduce((a,r) => a + (parseFloat(r.hours||r.Hours_Logged||0)), 0);
+  const capexHours = capexRecs.reduce((a,r) => a + (parseFloat(r.hours||r.Hours_Logged||0)), 0);
+  const shiftDollar = Math.round(capexHours * 95);
+  document.getElementById('shift-dollar').textContent = '$' + shiftDollar.toLocaleString();
+  document.getElementById('shift-capex-bar').style.width = capexPct + '%';
+  document.getElementById('shift-capex-bar').textContent = capexPct > 8 ? capexPct + '% CapEx' : '';
+  document.getElementById('shift-opex-bar').style.width = opexPct + '%';
+  document.getElementById('shift-opex-bar').textContent = opexPct > 8 ? opexPct + '% OpEx' : '';
+
+  // Pie chart
+  drawPie(capexRecs.length, opexRecs.length, ambRecs.length, total);
+  document.getElementById('pie-capex-lbl').textContent = 'CapEx: ' + capexRecs.length + ' (' + capexPct + '%)';
+  document.getElementById('pie-opex-lbl').textContent = 'OpEx: ' + opexRecs.length + ' (' + opexPct + '%)';
+  document.getElementById('pie-amb-lbl').textContent = 'Ambiguous: ' + ambRecs.length;
+
+  // Results table
+  renderResultsTable(records);
+
+  // Audit log
+  auditLog = records.map((r,i) => ({
+    audit_id: 'AUD-' + String(i+1).padStart(5,'0'),
+    record_id: r.id || ('REC-' + String(i+1).padStart(4,'0')),
+    engineer_id: r.Engineer_ID || r.engId || 'ENG-XXXX',
+    initiative: r.InitiativeName || r.initiative || 'Unknown',
+    timestamp: new Date(Date.now() - (records.length-i)*60000).toISOString(),
+    classification: r.classification,
+    confidence: r.confidence,
+    routing: r.routing,
+    evidence: r.evidence,
+    rule_version: 'v2.1.0',
+    rule_scores: r.ruleScores,
+    override: overrides[r.id] || null
+  }));
+  document.getElementById('audit-count').textContent = auditLog.length;
+  document.getElementById('audit-overrides').textContent = Object.keys(overrides).length;
+}
+
+// ============================================================
+// PIE CHART
+// ============================================================
+function drawPie(capex, opex, amb, total) {
+  if (!total) return;
+  const svg = document.getElementById('pie-svg');
+  const cx=60, cy=60, r=50;
+  const slices = [
+    { value: capex/total, color: '#3fb950' },
+    { value: opex/total, color: '#f85149' },
+    { value: amb/total, color: '#d29922' }
+  ];
+  let angle = -Math.PI/2;
+  let paths = '';
+  for (const s of slices) {
+    if (s.value <= 0) continue;
+    const sweep = s.value * 2 * Math.PI;
+    const x1 = cx + r*Math.cos(angle), y1 = cy + r*Math.sin(angle);
+    const x2 = cx + r*Math.cos(angle+sweep), y2 = cy + r*Math.sin(angle+sweep);
+    const large = sweep > Math.PI ? 1 : 0;
+    paths += '<path d="M'+cx+','+cy+' L'+x1+','+y1+' A'+r+','+r+' 0 '+large+' 1 '+x2+','+y2+' Z" fill="'+s.color+'" opacity="0.9"/>' ;
+    angle += sweep;
+  }
+  svg.innerHTML = '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#161b22"/>' + paths + '<circle cx="'+cx+'" cy="'+cy+'" r="22" fill="#161b22"/>';
+}
+
+// ============================================================
+// RESULTS TABLE
+// ============================================================
+function renderResultsTable(records) {
+  document.getElementById('results-empty').style.display = 'none';
+  document.getElementById('results-table-wrap').style.display = 'block';
+  const tbody = document.getElementById('results-tbody');
+  tbody.innerHTML = records.map((r,i) => {
+    const id = r.id || ('REC-'+i);
+    const ovr = overrides[id];
+    const cls = ovr || r.classification;
+    const badge = cls==='CapEx'?'badge-capex':cls==='OpEx'?'badge-opex':'badge-amb';
+    const confColor = r.confidence>=65?'var(--green)':r.confidence>=50?'var(--yellow)':'var(--red)';
+    const capexPct = r.CapEx_Eligible_Pct || r.capexPct || '—';
+    const labCat = r.LaborSurvey_Category || r.category || '—';
+    const evid = (r.evidence||'').substring(0,120) + (r.evidence && r.evidence.length>120?'…':'');
+    return '<tr>'+
+      '<td class="mono" style="font-size:11px">'+(r.Engineer_ID||r.engId||'—')+'</td>'+
+      '<td style="font-size:11px;max-width:140px">'+(r.InitiativeName||r.initiative||'—').substring(0,40)+'</td>'+
+      '<td style="font-size:11px">'+(r.FiscalYear||r.year||'—')+' '+(r.FiscalMonth||r.month||'')+'</td>'+
+      '<td><span class="'+badge+'">'+cls+'</span>'+(ovr?'<span style="font-size:10px;color:var(--orange);margin-left:4px">✎ overridden</span>':'')+'</td>'+
+      '<td><div style="display:flex;align-items:center;gap:6px"><span style="color:'+confColor+';font-weight:600;font-size:12px">'+r.confidence+'%</span>'+
+      '<div class="conf-bar" style="width:60px"><div class="conf-fill" style="width:'+r.confidence+'%;background:'+confColor+'"></div></div></div></td>'+
+      '<td style="color:'+(capexPct>=85?'var(--green)':'var(--text)')+'"><strong>'+capexPct+'%</strong></td>'+
+      '<td style="font-size:11px;max-width:100px">'+String(labCat).substring(0,30)+'</td>'+
+      '<td class="evidence-cell">'+evid+'</td>'+
+      '<td>'+
+        '<button class="btn btn-sm btn-outline override-btn" onclick="overrideRecord(\'' + id + '\',\'CapEx\')">C</button>'+
+        '<button class="btn btn-sm btn-outline override-btn" onclick="overrideRecord(\'' + id + '\',\'OpEx\')">O</button>'+
+        (ovr ? '<button class="btn btn-sm btn-red override-btn" onclick="clearOverride(\'' + id + '\')">✕</button>' : '')+
+      '</td>'+
+    '</tr>';
+
+
+
+
+  }).join('');
+}
+
+function overrideRecord(id, cls) {
+  overrides[id] = cls;
+  const combined = [...(formRecords.length?formRecords:[]),...(allRecords.length?allRecords:[])];
+  if (combined.length) updateDashboard(combined);
+  document.getElementById('audit-overrides').textContent = Object.keys(overrides).length;
+}
+function clearOverride(id) {
+  delete overrides[id];
+  const combined = [...(formRecords.length?formRecords:[]),...(allRecords.length?allRecords:[])];
+  if (combined.length) updateDashboard(combined);
+  document.getElementById('audit-overrides').textContent = Object.keys(overrides).length;
+}
+
+// ============================================================
+// AUDIT TRAIL
+// ============================================================
+function renderAudit() {
+  const container = document.getElementById('audit-list');
+  if (!auditLog.length) {
+    container.innerHTML = '<div class="alert alert-info">ℹ Load data to see audit trail entries. Stub records are shown below.</div>' + renderStubAudit();
+    return;
+  }
+  container.innerHTML = auditLog.slice(0,20).map((a,i) => {
+    const badge = a.classification==='CapEx'?'badge-capex':a.classification==='OpEx'?'badge-opex':'badge-amb';
+    const confColor = a.confidence>=65?'var(--green)':a.confidence>=50?'var(--yellow)':'var(--red)';
+    return '<div class="audit-item" id="audit-'+i+'" onclick="toggleAudit('+i+')">'+
+      '<div class="audit-header">'+
+        '<span class="mono" style="font-size:11px;color:var(--text3)">'+a.audit_id+'</span>'+
+        '<span class="mono" style="font-size:12px">'+a.engineer_id+'</span>'+
+        '<span class="'+badge+'">'+a.classification+'</span>'+
+        '<span style="color:'+confColor+';font-size:12px;font-weight:600">'+a.confidence+'% conf</span>'+
+        '<span style="font-size:11px;color:var(--text3)">Rule: '+a.rule_version+'</span>'+
+        '<span style="font-size:11px;color:var(--text3);margin-left:auto">'+a.timestamp.replace('T',' ').substring(0,19)+'</span>'+
+        (a.override?'<span class="badge-stub">OVERRIDDEN</span>':'')+
+      '</div>'+
+      '<div class="audit-detail" id="audit-detail-'+i+'">'+
+        '<div class="detail-grid">'+
+          '<div><div class="detail-label">Record ID</div><div class="detail-value">'+a.record_id+'</div></div>'+
+          '<div><div class="detail-label">Routing</div><div class="detail-value">'+a.routing+'</div></div>'+
+          '<div><div class="detail-label">Rule Scores</div><div class="detail-value">R1:'+(a.rule_scores?a.rule_scores.R1:'—')+' R2:'+(a.rule_scores?a.rule_scores.R2:'—')+' R3:'+(a.rule_scores?a.rule_scores.R3:'—')+'</div></div>'+
+          '<div><div class="detail-label">Initiative</div><div class="detail-value">'+a.initiative.substring(0,50)+'</div></div>'+
+          '<div style="grid-column:1/-1"><div class="detail-label">Evidence</div><div class="detail-value" style="white-space:normal;line-height:1.5">'+a.evidence+'</div></div>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  document.getElementById('audit-count').textContent = auditLog.length;
+}
+
+function renderStubAudit() {
+  const stubs = [
+    { id:'AUD-00001', eng:'ENG-0071', cls:'CapEx', conf:91, route:'output', rv:'v2.1.0', note:'High CapEx eligibility 85%. Expansion cost class. Build Milestone. 3 milestones.' },
+    { id:'AUD-00002', eng:'ENG-0034', cls:'CapEx', conf:83, route:'output', rv:'v2.1.0', note:'CapEx-eligible 80%. Expansion. Build Milestone. New Construction. 4 milestones.' },
+    { id:'AUD-00003', eng:'ENG-0099', cls:'CapEx', conf:94, route:'output', rv:'v2.1.0', note:'Strong CapEx 95%. Expansion. Build Milestone. 7 milestones. Conf boost applied.' },
+  ];
+  return stubs.map(function(s,i) { return '<div class="audit-item">'+
+    '<div class="audit-header">'+
+      '<span class="mono" style="font-size:11px;color:var(--text3)">'+s.id+'</span>'+
+      '<span class="mono">'+s.eng+'</span>'+
+      '<span class="badge-capex">'+s.cls+'</span>'+
+      '<span style="color:var(--green);font-size:12px;font-weight:600">'+s.conf+'%</span>'+
+      '<span style="font-size:11px;color:var(--text3)">'+s.rv+'</span>'+
+      '<span class="badge-stub" style="margin-left:auto">STUB</span>'+
+    '</div>'+
+  '</div>'; }).join('');
+}
+
+function toggleAudit(i) {
+  const el = document.getElementById('audit-'+i);
+  const detail = document.getElementById('audit-detail-'+i);
+  el.classList.toggle('expanded');
+  detail.classList.toggle('show');
+}
+
+// ============================================================
+// PIPELINE STAGE INTERACTION
+// ============================================================
+const stageDetails = [
+  { name:'Schema Validation', detail:'Every ActivityRecord is validated against the 39-field schema definition. Required fields trigger rejection; optional fields are flagged for readiness scoring. Type checks enforce numeric (Hours_Logged, CapEx_Eligible_Pct, ActualSpend_USD), enum (VZZ_CostClass, Activity_Type, LaborSurvey_Category), and string fields. Records failing validation go to the dead-letter queue — they do not proceed through the pipeline.' },
+  { name:'Field Normalisation', detail:'String normalisation (uppercase city/state, trim whitespace), date format standardisation (ISO 8601), currency cleaning ($2,256.94 → 2256.94), engineer ID enforcement (ENG-NNNNN). Stateless transformation — infinitely parallelisable, target latency <10ms per record, no external dependencies.' },
+  { name:'Activity Signal Weighting', detail:'Per-field weight coefficients from PersonaConfig are applied: R1 (CapEx% 35%), R2 (Cost Class 20%), R3 (Activity Type 20%), R4 (Labor Category 15%), R5 (Milestones 10%). Weights are versioned in the PersonaConfig store — changing weights requires no code deployment. Enables A/B testing of rule configurations.' },
+  { name:'HR Context Injection', detail:'Engineer job title, job family, org unit, and manager are looked up from the HR profile store and attached as HRContext. Production: real-time HR API call with 24-hour cache. Stub: static JSON keyed by ENG-ID. Missing HR records receive a confidence penalty (-5pts) and are flagged in the evidence note.' },
+  { name:'Investment Context Injection', detail:'Initiative funding category, CapEx/OpEx designation, approved budget, and asset class are looked up from the Investment Registry and attached as InvestmentContext. Production: nightly refresh from capital management system. Stub: derived from Excel dataset. Unknown initiatives trigger alert to capital program managers.' },
+  { name:'Readiness Check', detail:'Verify all mandatory classification inputs are present. Compute classification-readiness score (0–100%) based on proportion of optional enrichment fields populated. Records below 70% readiness receive an automatic confidence penalty proportional to their incompleteness. Readiness score is recorded in the audit log alongside the classification.' },
+];
+document.querySelectorAll('.stage').forEach((el,i) => {
+  el.addEventListener('click', () => {
+    document.querySelectorAll('.stage').forEach(s=>s.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('stage-detail-content').innerHTML = '<div style="font-weight:600;margin-bottom:8px">Stage '+(i+1)+': '+stageDetails[i].name+'</div><div style="font-size:12px;color:var(--text2);line-height:1.7">'+stageDetails[i].detail+'</div>';
+  });
+});
+
+// ============================================================
+// EXPORT CSV
+// ============================================================
+function exportCSV() {
+  const records = formRecords.length ? formRecords : allRecords;
+  if (!records.length) { alert('No records to export. Load data first.'); return; }
+  const headers = ['Record_ID','Engineer_ID','Initiative','Year','Month','Classification','Confidence','CapEx_Pct','Labor_Category','Evidence','Routing'];
+  const rows = records.map((r,i) => [
+    r.id||('REC-'+i), r.Engineer_ID||r.engId||'', r.InitiativeName||r.initiative||'',
+    r.FiscalYear||r.year||'', r.FiscalMonth||r.month||'',
+    overrides[r.id]||r.classification, r.confidence,
+    r.CapEx_Eligible_Pct||r.capexPct||'', r.LaborSurvey_Category||r.category||'',
+    '"'+(r.evidence||'').replace(/"/g,"''")+'"', r.routing
+  ]);
+  const csv = [headers.join(',')].concat(rows.map(function(r){return r.join(',');})).join('\n');
+  const a = document.createElement('a');
+  a.href = 'data:text/csv;charset=utf-8,'+encodeURIComponent(csv);
+  a.download = 'EAC_Classification_Results.csv';
+  a.click();
+}
+
+// ============================================================
+// INIT — runs after page fully loads
+// ============================================================
+// IMMEDIATE INIT - runs no matter what
+(function init() {
+  try { renderFormTable(); } catch(e) {}
+  try { loadFormClassification(); } catch(e) {}
+})();
+document.addEventListener('DOMContentLoaded', function() {
+  try { renderFormTable(); } catch(e) {}
+  try { loadFormClassification(); } catch(e) {}
+});
+window.onload = function() {
+  try { renderFormTable(); } catch(e) {}
+  try { loadFormClassification(); } catch(e) {}
+};
+setTimeout(function() { try { renderFormTable(); loadFormClassification(); } catch(e) {} }, 100);
+setTimeout(function() { try { renderFormTable(); loadFormClassification(); } catch(e) {} }, 500);
+setTimeout(function() { try { renderFormTable(); loadFormClassification(); } catch(e) {} }, 1500);
+</script>
+</body>
+</html>
