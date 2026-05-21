@@ -9,7 +9,7 @@ Automatically classifies engineer work activities as **CapEx** or **OpEx** using
 3. Data loads automatically — no server needed
 
 ## Live App
-> Vercel URL: [add your Vercel URL here]
+> Vercel URL: https://eac-system-topaz.vercel.app
 
 ## Files in This Repo
 | File | What it is |
@@ -38,6 +38,6 @@ Automatically classifies engineer work activities as **CapEx** or **OpEx** using
 | R5 | 10% | Milestones Completed |
 
 ## Submitted By
-Name: [Your Full Name]  
-Email: [Your Email]  
+Name: Charan Yelubandi
+Email: ram.newcareer@gmail.com
 Date: May 21, 2026
